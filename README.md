@@ -20,4 +20,13 @@ Initial repository ZIP:
 
 - https://techytackler.github.io/codex-kodi/repository.codex-1.0.0.zip
 
+## Disclaimer
+
+CODEX Kodi does not provide, host, distribute or include any television
+channels, video streams, playlists or other media content.
+
+Users must supply their own compatible IPTV service and are responsible
+for ensuring they have the necessary rights and permissions to access
+any content used with this add-on.
+
 Use only with IPTV services and streams you are authorised to access.
