@@ -1,0 +1,8 @@
+# Kodi Media Center language file
+msgid ""
+msgstr ""
+"Project-Id-Version: CODEX IPTV\n"
+"Language: en_GB\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
