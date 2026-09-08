@@ -1,33 +1,46 @@
 <?xml version="1.0" encoding="utf-8"?>
 <settings version="1">
     <section id="plugin.video.codex">
-        <category id="provider" label="Provider">
-            <group id="1">
-                <setting id="server" type="string" label="Server address">
+        <category id="provider" label="32000">
+            <group id="1" label="32000">
+                <setting id="server" type="string" label="32001">
                     <level>0</level>
-                    <default></default>
-                    <control type="edit" format="string"/>
-                </setting>
-                <setting id="username" type="string" label="Username">
-                    <level>0</level>
-                    <default></default>
-                    <control type="edit" format="string"/>
-                </setting>
-                <setting id="password" type="string" label="Password">
-                    <level>0</level>
-                    <default></default>
+                    <default/>
+                    <constraints>
+                        <allowempty>true</allowempty>
+                    </constraints>
                     <control type="edit" format="string">
-                        <heading>Password</heading>
+                        <heading>32001</heading>
+                    </control>
+                </setting>
+                <setting id="username" type="string" label="32002">
+                    <level>0</level>
+                    <default/>
+                    <constraints>
+                        <allowempty>true</allowempty>
+                    </constraints>
+                    <control type="edit" format="string">
+                        <heading>32002</heading>
+                    </control>
+                </setting>
+                <setting id="password" type="string" label="32003">
+                    <level>0</level>
+                    <default/>
+                    <constraints>
+                        <allowempty>true</allowempty>
+                    </constraints>
+                    <control type="edit" format="string">
+                        <heading>32003</heading>
                         <hidden>true</hidden>
                     </control>
                 </setting>
-                <setting id="stream_extension" type="string" label="Live stream extension">
+                <setting id="stream_extension" type="string" label="32004">
                     <level>0</level>
                     <default>ts</default>
                     <constraints>
                         <options>
-                            <option label=".ts">ts</option>
-                            <option label=".m3u8">m3u8</option>
+                            <option label="32005">ts</option>
+                            <option label="32006">m3u8</option>
                         </options>
                     </constraints>
                     <control type="spinner" format="string"/>
