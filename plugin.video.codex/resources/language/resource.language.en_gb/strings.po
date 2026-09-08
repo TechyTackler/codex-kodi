@@ -6,3 +6,31 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
+
+msgctxt "#32000"
+msgid "Provider"
+msgstr ""
+
+msgctxt "#32001"
+msgid "Server address"
+msgstr ""
+
+msgctxt "#32002"
+msgid "Username"
+msgstr ""
+
+msgctxt "#32003"
+msgid "Password"
+msgstr ""
+
+msgctxt "#32004"
+msgid "Live stream extension"
+msgstr ""
+
+msgctxt "#32005"
+msgid ".ts"
+msgstr ""
+
+msgctxt "#32006"
+msgid ".m3u8"
+msgstr ""
