@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <addon id="plugin.video.codex"
        name="CODEX IPTV"
-       version="0.1.0"
+       version="0.2.0"
        provider-name="TechyTackler">
     <requires>
         <import addon="xbmc.python" version="3.0.1"/>
@@ -15,5 +15,9 @@
         <platform>all</platform>
         <license>MIT</license>
         <source>https://github.com/TechyTackler/codex-kodi</source>
+		<assets>
+		<icon>icon.png</icon>
+		<fanart>fanart.png</fanart>
+		</assets>
     </extension>
 </addon>
