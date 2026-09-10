@@ -1,9 +1,11 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 
 import base64
+import calendar
 import json
 import sys
 import time
+import xml.etree.ElementTree as ET
 
 from datetime import datetime
 from urllib.error import HTTPError, URLError
@@ -401,6 +403,421 @@ def get_now_next_epg(
     }
 
 
+def xmltv_url():
+    """
+    Build the provider XMLTV endpoint URL without logging credentials.
+    """
+    server, username, password = credentials()
+
+    return "{}/xmltv.php?{}".format(
+        server,
+        urlencode(
+            {
+                "username": username,
+                "password": password,
+            }
+        ),
+    )
+
+
+def parse_xmltv_timestamp(value):
+    """
+    Convert an XMLTV timestamp to a Unix timestamp without relying on
+    datetime.strptime(), which can fail on malformed provider timestamps.
+
+    Common XMLTV formats such as:
+    20260910100000 +0000
+    20260910100000
+    are supported.
+    """
+    if not value:
+        return 0
+
+    raw = str(value).strip()
+
+    if len(raw) < 14:
+        return 0
+
+    stamp = raw[:14]
+
+    if not stamp.isdigit():
+        return 0
+
+    try:
+        year = int(stamp[0:4])
+        month = int(stamp[4:6])
+        day = int(stamp[6:8])
+        hour = int(stamp[8:10])
+        minute = int(stamp[10:12])
+        second = int(stamp[12:14])
+
+        timestamp = calendar.timegm(
+            (
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+            )
+        )
+
+        remainder = raw[14:].strip().replace(
+            " ",
+            "",
+        )
+
+        if (
+            len(remainder) >= 5
+            and remainder[0] in ("+", "-")
+            and remainder[1:5].isdigit()
+        ):
+            offset_hours = int(
+                remainder[1:3]
+            )
+
+            offset_minutes = int(
+                remainder[3:5]
+            )
+
+            offset_seconds = (
+                offset_hours * 3600
+                + offset_minutes * 60
+            )
+
+            if remainder[0] == "+":
+                timestamp -= offset_seconds
+            else:
+                timestamp += offset_seconds
+
+        return int(
+            timestamp
+        )
+
+    except (
+        TypeError,
+        ValueError,
+        OverflowError,
+    ):
+        return 0
+
+
+def xmltv_child_text(element, name):
+    """
+    Read one child value from an XMLTV element, tolerating namespaces.
+    """
+    for child in list(element):
+        tag = str(child.tag).split("}")[-1]
+
+        if tag == name:
+            return (
+                child.text
+                or ""
+            ).strip()
+
+    return ""
+
+
+def get_live_epg_map(streams):
+    """
+    Retrieve Now / Next EPG for the current live category in one XMLTV request.
+
+    Only programme entries matching channels in the current category are kept,
+    so the XML is processed incrementally without loading the full guide into
+    memory.
+    """
+    wanted_channel_ids = {
+        str(
+            stream.get(
+                "epg_channel_id",
+                "",
+            )
+        ).strip()
+        for stream in streams
+        if stream.get(
+            "epg_channel_id"
+        )
+    }
+
+    if not wanted_channel_ids:
+        return {}
+
+    req = Request(
+        xmltv_url(),
+        headers={
+            "User-Agent": (
+                "CODEX-IPTV/{} Kodi"
+            ).format(
+                ADDON_VERSION
+            ),
+            "Accept": (
+                "application/xml,text/xml,*/*"
+            ),
+        },
+    )
+
+    now_timestamp = int(
+        time.time()
+    )
+
+    epg_map = {
+        channel_id: {
+            "now": None,
+            "next": None,
+        }
+        for channel_id in wanted_channel_ids
+    }
+
+    try:
+        with urlopen(
+            req,
+            timeout=20,
+        ) as response:
+            for event, element in ET.iterparse(
+                response,
+                events=("end",),
+            ):
+                tag = str(
+                    element.tag
+                ).split("}")[-1]
+
+                if tag != "programme":
+                    continue
+
+                channel_id = str(
+                    element.attrib.get(
+                        "channel",
+                        "",
+                    )
+                ).strip()
+
+                if channel_id not in wanted_channel_ids:
+                    element.clear()
+                    continue
+
+                start_timestamp = parse_xmltv_timestamp(
+                    element.attrib.get(
+                        "start"
+                    )
+                )
+
+                stop_timestamp = parse_xmltv_timestamp(
+                    element.attrib.get(
+                        "stop"
+                    )
+                )
+
+                if not start_timestamp:
+                    element.clear()
+                    continue
+
+                programme = {
+                    "title": xmltv_child_text(
+                        element,
+                        "title",
+                    ),
+                    "description": xmltv_child_text(
+                        element,
+                        "desc",
+                    ),
+                    "start_timestamp": start_timestamp,
+                    "stop_timestamp": stop_timestamp,
+                    "start_time": datetime.fromtimestamp(
+                        start_timestamp
+                    ).strftime(
+                        "%H:%M"
+                    ),
+                    "end_time": (
+                        datetime.fromtimestamp(
+                            stop_timestamp
+                        ).strftime(
+                            "%H:%M"
+                        )
+                        if stop_timestamp
+                        else ""
+                    ),
+                }
+
+                channel_epg = epg_map[
+                    channel_id
+                ]
+
+                if (
+                    stop_timestamp
+                    and start_timestamp <= now_timestamp < stop_timestamp
+                ):
+                    current = channel_epg.get(
+                        "now"
+                    )
+
+                    if (
+                        current is None
+                        or start_timestamp
+                        > current.get(
+                            "start_timestamp",
+                            0,
+                        )
+                    ):
+                        channel_epg["now"] = (
+                            programme
+                        )
+
+                elif start_timestamp > now_timestamp:
+                    next_programme = channel_epg.get(
+                        "next"
+                    )
+
+                    if (
+                        next_programme is None
+                        or start_timestamp
+                        < next_programme.get(
+                            "start_timestamp",
+                            0,
+                        )
+                    ):
+                        channel_epg["next"] = (
+                            programme
+                        )
+
+                element.clear()
+
+    except (
+        HTTPError,
+        URLError,
+        TimeoutError,
+        ET.ParseError,
+        ValueError,
+        OSError,
+    ) as exc:
+        log(
+            "XMLTV EPG error: {}".format(
+                exc
+            ),
+            xbmc.LOGWARNING,
+        )
+
+        return {}
+
+    return epg_map
+
+
+def live_epg_plot(epg):
+    """
+    Format standard Kodi plot text for a live channel's Now / Next guide.
+    """
+    if not isinstance(
+        epg,
+        dict,
+    ):
+        return ""
+
+    now_programme = epg.get(
+        "now"
+    )
+
+    next_programme = epg.get(
+        "next"
+    )
+
+    lines = []
+
+    if now_programme:
+        now_title = (
+            now_programme.get(
+                "title"
+            )
+            or "Current programme"
+        )
+
+        now_start = (
+            now_programme.get(
+                "start_time"
+            )
+            or ""
+        )
+
+        now_end = (
+            now_programme.get(
+                "end_time"
+            )
+            or ""
+        )
+
+        now_time = ""
+
+        if now_start and now_end:
+            now_time = " ({} - {})".format(
+                now_start,
+                now_end,
+            )
+
+        lines.append(
+            "[COLOR FF00AEEF][B]NOW[/B][/COLOR]: {}{}".format(
+                now_title,
+                now_time,
+            )
+        )
+
+        description = (
+            now_programme.get(
+                "description"
+            )
+            or ""
+        ).strip()
+
+        if description:
+            lines.extend(
+                [
+                    "",
+                    description,
+                ]
+            )
+
+    if next_programme:
+        next_title = (
+            next_programme.get(
+                "title"
+            )
+            or "Upcoming programme"
+        )
+
+        next_start = (
+            next_programme.get(
+                "start_time"
+            )
+            or ""
+        )
+
+        next_end = (
+            next_programme.get(
+                "end_time"
+            )
+            or ""
+        )
+
+        next_time = ""
+
+        if next_start and next_end:
+            next_time = " ({} - {})".format(
+                next_start,
+                next_end,
+            )
+
+        if lines:
+            lines.append("")
+
+        lines.append(
+            "[COLOR FF00AEEF][B]UP NEXT[/B][/COLOR]: {}{}".format(
+                next_title,
+                next_time,
+            )
+        )
+
+    return "\n".join(
+        lines
+    )
+
+
 # ============================================================
 # GENERAL HELPERS
 # ============================================================
@@ -465,6 +882,66 @@ def first_backdrop(value):
         return value
 
     return ""
+
+
+def clean_metadata_text(value):
+    """
+    Return provider metadata only when it is suitable for display as text.
+
+    Some Xtream providers place artwork, playlist or stream URLs in fields
+    normally used for plots/overviews. Kodi then renders those URLs in the
+    information panel. CODEX suppresses those values instead of exposing
+    provider URLs in the UI.
+    """
+    if value in (
+        None,
+        "",
+        [],
+        {},
+    ):
+        return ""
+
+    if isinstance(
+        value,
+        (list, tuple, dict),
+    ):
+        return ""
+
+    text = str(value).strip()
+
+    if not text:
+        return ""
+
+    lowered = text.lower()
+
+    if lowered.startswith(
+        (
+            "http://",
+            "https://",
+            "plugin://",
+            "rtmp://",
+            "rtsp://",
+            "m3u://",
+            "m3u8://",
+        )
+    ):
+        return ""
+
+    if (
+        "://" in lowered
+        and (
+            "/live/" in lowered
+            or "/movie/" in lowered
+            or "/series/" in lowered
+            or "player_api.php" in lowered
+            or "xmltv.php" in lowered
+            or ".m3u" in lowered
+            or ".m3u8" in lowered
+        )
+    ):
+        return ""
+
+    return text
 
 
 def year_from_date(value):
@@ -833,7 +1310,7 @@ def root_menu():
     )
 
     add_folder(
-        "Favourites",
+        "Favourites (Coming Soon)",
         "favourites",
         art=base_art(),
         info={
@@ -846,7 +1323,7 @@ def root_menu():
     )
 
     add_action(
-        "Search",
+        "Search (Coming Soon)",
         "search",
         art=base_art(),
         info={
@@ -993,9 +1470,11 @@ def live_streams(
         "videos",
     )
 
+    epg_map = get_live_epg_map(
+        data
+    )
+
     # Provider order is deliberately preserved.
-    # EPG helpers remain available but are intentionally not
-    # called in this clean baseline.
     for stream in data:
         stream_id = str(
             stream.get(
@@ -1018,6 +1497,25 @@ def live_streams(
             )
             or ""
         )
+
+        epg_channel_id = str(
+            stream.get(
+                "epg_channel_id",
+                "",
+            )
+        ).strip()
+
+        epg_plot = live_epg_plot(
+            epg_map.get(
+                epg_channel_id,
+                {},
+            )
+        )
+
+        if not epg_plot:
+            epg_plot = (
+                "Programme information is currently unavailable."
+            )
 
         play_url = (
             "{}/live/{}/{}/{}.{}".format(
@@ -1043,7 +1541,19 @@ def live_streams(
             {
                 "title": name,
                 "mediatype": "video",
+                "plot": epg_plot,
+                "playcount": 0,
             },
+        )
+
+        item.setProperty(
+            "Watched",
+            "false",
+        )
+
+        item.setProperty(
+            "UnWatched",
+            "true",
         )
 
         apply_art(
@@ -1714,11 +2224,13 @@ def series_list(
             )
         )
 
-        plot = first_value(
-            show.get("plot"),
-            show.get(
-                "description"
-            ),
+        plot = clean_metadata_text(
+            first_value(
+                show.get("plot"),
+                show.get(
+                    "description"
+                ),
+            )
         )
 
         genre = (
@@ -1855,9 +2367,12 @@ def series_seasons(
         series_name,
     )
 
+    # Use the TV show content family for the season browser so Kodi skins
+    # continue to render the parent series artwork instead of substituting
+    # the generic folder icon for season folders.
     xbmcplugin.setContent(
         HANDLE,
-        "seasons",
+        "tvshows",
     )
 
     show_poster = first_value(
@@ -1873,11 +2388,13 @@ def series_seasons(
         )
     )
 
-    show_plot = first_value(
-        show_info.get("plot"),
-        show_info.get(
-            "description"
-        ),
+    show_plot = clean_metadata_text(
+        first_value(
+            show_info.get("plot"),
+            show_info.get(
+                "description"
+            ),
+        )
     )
 
     show_genre = (
@@ -1979,10 +2496,12 @@ def series_seasons(
             show_poster,
         )
 
-        season_plot = first_value(
-            season_data.get("overview"),
-            season_data.get("plot"),
-            show_plot,
+        season_plot = clean_metadata_text(
+            first_value(
+                season_data.get("overview"),
+                season_data.get("plot"),
+                show_plot,
+            )
         )
 
         art = base_art(
@@ -1992,6 +2511,16 @@ def series_seasons(
             fanart=show_backdrop,
             landscape=show_backdrop,
         )
+
+        # Kodi skins can request inherited season / TV show artwork through
+        # these extended art keys. Supplying both keeps the season browser
+        # visually tied to its parent series where provider season artwork
+        # is missing.
+        if season_poster:
+            art["season.poster"] = season_poster
+
+        if show_poster:
+            art["tvshow.poster"] = show_poster
 
         info = {
             "title": season_name,
@@ -2166,12 +2695,14 @@ def series_episodes(
             or {}
         )
 
-        plot = first_value(
-            episode_info.get("plot"),
-            episode_info.get(
-                "description"
-            ),
-            episode.get("plot"),
+        plot = clean_metadata_text(
+            first_value(
+                episode_info.get("plot"),
+                episode_info.get(
+                    "description"
+                ),
+                episode.get("plot"),
+            )
         )
 
         duration = safe_int(
