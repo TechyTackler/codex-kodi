@@ -16,6 +16,7 @@ import xbmc
 import xbmcaddon
 import xbmcgui
 import xbmcplugin
+import xbmcvfs
 
 
 # ============================================================
@@ -1212,6 +1213,1189 @@ def add_action(
 
 
 # ============================================================
+# CODEX FAVOURITES
+# ============================================================
+
+FAVOURITES_FILE = xbmcvfs.translatePath(
+    "special://profile/addon_data/{}/favourites.json".format(
+        ADDON.getAddonInfo("id")
+    )
+)
+
+
+def load_favourites():
+    """
+    Load CODEX favourites from the local Kodi profile.
+
+    Only catalogue identifiers and display metadata are stored.
+    Provider credentials and playback URLs are never written here.
+    """
+    if not xbmcvfs.exists(
+        FAVOURITES_FILE
+    ):
+        return []
+
+    try:
+        handle = xbmcvfs.File(
+            FAVOURITES_FILE
+        )
+
+        payload = handle.read()
+        handle.close()
+
+        data = json.loads(
+            payload
+            or "[]"
+        )
+
+        if isinstance(
+            data,
+            list,
+        ):
+            return [
+                entry
+                for entry in data
+                if isinstance(
+                    entry,
+                    dict,
+                )
+            ]
+
+    except (
+        OSError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        log(
+            "Unable to load favourites: {}".format(
+                exc
+            ),
+            xbmc.LOGWARNING,
+        )
+
+    return []
+
+
+def save_favourites(favourites):
+    """
+    Save CODEX favourites to the local Kodi profile.
+    """
+    try:
+        profile_dir = xbmcvfs.translatePath(
+            "special://profile/addon_data/{}".format(
+                ADDON.getAddonInfo("id")
+            )
+        )
+
+        if not xbmcvfs.exists(
+            profile_dir
+        ):
+            xbmcvfs.mkdirs(
+                profile_dir
+            )
+
+        handle = xbmcvfs.File(
+            FAVOURITES_FILE,
+            "w",
+        )
+
+        handle.write(
+            json.dumps(
+                favourites,
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+
+        handle.close()
+
+        return True
+
+    except (
+        OSError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        log(
+            "Unable to save favourites: {}".format(
+                exc
+            ),
+            xbmc.LOGERROR,
+        )
+
+        xbmcgui.Dialog().notification(
+            ADDON_NAME,
+            "Unable to save CODEX Favourites.",
+            xbmcgui.NOTIFICATION_ERROR,
+            4000,
+        )
+
+        return False
+
+
+def favourite_key(
+    content_type,
+    content_id,
+):
+    return "{}:{}".format(
+        str(content_type),
+        str(content_id),
+    )
+
+
+def favourite_key_set(favourites=None):
+    """
+    Return the current CODEX favourites as a set of lookup keys.
+
+    Directory builders can load favourites once, build this set once and
+    reuse it for every rendered item instead of repeatedly reading the same
+    JSON file from disk.
+    """
+    if favourites is None:
+        favourites = load_favourites()
+
+    return {
+        favourite_key(
+            entry.get(
+                "content_type",
+                "",
+            ),
+            entry.get(
+                "content_id",
+                "",
+            ),
+        )
+        for entry in favourites
+        if isinstance(entry, dict)
+    }
+
+
+def favourite_exists(
+    content_type,
+    content_id,
+    favourite_keys=None,
+):
+    wanted_key = favourite_key(
+        content_type,
+        content_id,
+    )
+
+    if favourite_keys is None:
+        favourite_keys = favourite_key_set()
+
+    return wanted_key in favourite_keys
+
+
+def favourite_context_menu(
+    content_type,
+    content_id,
+    title,
+    poster="",
+    fanart="",
+    epg_channel_id="",
+    refresh_after=True,
+    favourite_keys=None,
+):
+    """
+    Build the CODEX add/remove favourite context-menu entry.
+    """
+    already_favourite = favourite_exists(
+        content_type,
+        content_id,
+        favourite_keys=favourite_keys,
+    )
+
+    action = (
+        "remove_favourite"
+        if already_favourite
+        else "add_favourite"
+    )
+
+    label = (
+        "Remove from CODEX Favourites"
+        if already_favourite
+        else "Add to CODEX Favourites"
+    )
+
+    command = "RunPlugin({})".format(
+        plugin_url(
+            action=action,
+            content_type=content_type,
+            content_id=content_id,
+            title=title,
+            poster=poster,
+            fanart=fanart,
+            epg_channel_id=epg_channel_id,
+            refresh_after=(
+                "1"
+                if refresh_after
+                else "0"
+            ),
+        )
+    )
+
+    return [
+        (
+            label,
+            command,
+        )
+    ]
+
+
+def add_favourite(
+    content_type,
+    content_id,
+    title,
+    poster="",
+    fanart="",
+    epg_channel_id="",
+    refresh_after=True,
+):
+    if (
+        content_type not in (
+            "live",
+            "movie",
+            "series",
+        )
+        or not content_id
+    ):
+        return
+
+    favourites = load_favourites()
+
+    wanted_key = favourite_key(
+        content_type,
+        content_id,
+    )
+
+    if any(
+        favourite_key(
+            entry.get(
+                "content_type",
+                "",
+            ),
+            entry.get(
+                "content_id",
+                "",
+            ),
+        ) == wanted_key
+        for entry in favourites
+    ):
+        xbmcgui.Dialog().notification(
+            ADDON_NAME,
+            "{} is already in Favourites.".format(
+                title
+                or "Item"
+            ),
+            xbmcgui.NOTIFICATION_INFO,
+            2500,
+        )
+
+        return
+
+    favourites.append(
+        {
+            "content_type": content_type,
+            "content_id": str(
+                content_id
+            ),
+            "title": (
+                title
+                or "Untitled"
+            ),
+            "poster": (
+                poster
+                or ""
+            ),
+            "fanart": (
+                fanart
+                or ""
+            ),
+            "epg_channel_id": (
+                epg_channel_id
+                or ""
+            ),
+        }
+    )
+
+    if save_favourites(
+        favourites
+    ):
+        xbmcgui.Dialog().notification(
+            ADDON_NAME,
+            "Added to Favourites: {}".format(
+                title
+                or "Item"
+            ),
+            xbmcgui.NOTIFICATION_INFO,
+            2500,
+        )
+
+        if refresh_after:
+            xbmc.executebuiltin(
+                "Container.Refresh"
+            )
+
+
+def remove_favourite(
+    content_type,
+    content_id,
+    title="",
+    refresh_after=True,
+):
+    favourites = load_favourites()
+
+    wanted_key = favourite_key(
+        content_type,
+        content_id,
+    )
+
+    updated = [
+        entry
+        for entry in favourites
+        if favourite_key(
+            entry.get(
+                "content_type",
+                "",
+            ),
+            entry.get(
+                "content_id",
+                "",
+            ),
+        ) != wanted_key
+    ]
+
+    if len(updated) == len(
+        favourites
+    ):
+        return
+
+    if save_favourites(
+        updated
+    ):
+        xbmcgui.Dialog().notification(
+            ADDON_NAME,
+            "Removed from Favourites: {}".format(
+                title
+                or "Item"
+            ),
+            xbmcgui.NOTIFICATION_INFO,
+            2500,
+        )
+
+        if refresh_after:
+            xbmc.executebuiltin(
+                "Container.Refresh"
+            )
+
+
+def favourites_root():
+    xbmcplugin.setPluginCategory(
+        HANDLE,
+        "Favourites",
+    )
+
+    add_folder(
+        "Live TV",
+        "favourites_list",
+        art=base_art(),
+        info={
+            "title": "Live TV Favourites",
+            "plot": (
+                "Browse your favourite "
+                "Live TV channels."
+            ),
+        },
+        content_type="live",
+        section_name="Live TV",
+    )
+
+    add_folder(
+        "Movies",
+        "favourites_list",
+        art=base_art(),
+        info={
+            "title": "Movie Favourites",
+            "plot": (
+                "Browse your favourite Movies."
+            ),
+        },
+        content_type="movie",
+        section_name="Movies",
+    )
+
+    add_folder(
+        "Series",
+        "favourites_list",
+        art=base_art(),
+        info={
+            "title": "Series Favourites",
+            "plot": (
+                "Browse your favourite Series."
+            ),
+        },
+        content_type="series",
+        section_name="Series",
+    )
+
+    xbmcplugin.endOfDirectory(
+        HANDLE
+    )
+
+
+def favourites_list(
+    content_type,
+    section_name,
+):
+    all_favourites = load_favourites()
+    current_favourite_keys = favourite_key_set(
+        all_favourites
+    )
+
+    favourites = [
+        entry
+        for entry in all_favourites
+        if entry.get(
+            "content_type"
+        ) == content_type
+    ]
+
+    xbmcplugin.setPluginCategory(
+        HANDLE,
+        "Favourites / {}".format(
+            section_name
+        ),
+    )
+
+    content_map = {
+        "live": "videos",
+        "movie": "movies",
+        "series": "tvshows",
+    }
+
+    xbmcplugin.setContent(
+        HANDLE,
+        content_map.get(
+            content_type,
+            "videos",
+        ),
+    )
+
+    if not favourites:
+        item = xbmcgui.ListItem(
+            label="No {} favourites yet".format(
+                section_name
+            )
+        )
+
+        item.setInfo(
+            "video",
+            {
+                "title": "No favourites yet",
+                "plot": (
+                    "Use the context menu on an item "
+                    "and choose Add to CODEX Favourites."
+                ),
+            },
+        )
+
+        apply_art(
+            item,
+            base_art(),
+        )
+
+        xbmcplugin.addDirectoryItem(
+            HANDLE,
+            plugin_url(
+                action="refresh"
+            ),
+            item,
+            isFolder=False,
+        )
+
+        xbmcplugin.endOfDirectory(
+            HANDLE
+        )
+
+        return
+
+    server, username, password = credentials()
+
+    live_extension = (
+        setting(
+            "stream_extension"
+        )
+        or "ts"
+    )
+
+    epg_map = {}
+
+    if content_type == "live":
+        epg_streams = [
+            {
+                "epg_channel_id": entry.get(
+                    "epg_channel_id",
+                    "",
+                )
+            }
+            for entry in favourites
+            if entry.get(
+                "epg_channel_id"
+            )
+        ]
+
+        if epg_streams:
+            epg_map = get_live_epg_map(
+                epg_streams
+            )
+
+    for entry in favourites:
+        content_id = str(
+            entry.get(
+                "content_id",
+                "",
+            )
+        )
+
+        if not content_id:
+            continue
+
+        title = (
+            entry.get("title")
+            or "Untitled"
+        )
+
+        poster = (
+            entry.get("poster")
+            or ""
+        )
+
+        fanart = (
+            entry.get("fanart")
+            or ""
+        )
+
+        if content_type == "live":
+            epg_channel_id = (
+                entry.get(
+                    "epg_channel_id"
+                )
+                or ""
+            )
+
+            epg_plot = live_epg_plot(
+                epg_map.get(
+                    epg_channel_id,
+                    {},
+                )
+            )
+
+            if not epg_plot:
+                epg_plot = (
+                    "Programme information is "
+                    "currently unavailable."
+                )
+
+            play_url = (
+                "{}/live/{}/{}/{}.{}".format(
+                    server,
+                    username,
+                    password,
+                    content_id,
+                    live_extension,
+                )
+            )
+
+            item = xbmcgui.ListItem(
+                label=title
+            )
+
+            item.setProperty(
+                "IsPlayable",
+                "true",
+            )
+
+            item.setInfo(
+                "video",
+                {
+                    "title": title,
+                    "mediatype": "video",
+                    "plot": epg_plot,
+                    "playcount": 0,
+                },
+            )
+
+            item.setProperty(
+                "Watched",
+                "false",
+            )
+
+            item.setProperty(
+                "UnWatched",
+                "true",
+            )
+
+            apply_art(
+                item,
+                base_art(
+                    icon=poster,
+                    thumb=poster,
+                    fanart=(
+                        fanart
+                        or ADDON_FANART
+                    ),
+                ),
+            )
+
+            item.addContextMenuItems(
+                favourite_context_menu(
+                    "live",
+                    content_id,
+                    title,
+                    poster=poster,
+                    fanart=fanart,
+                    epg_channel_id=epg_channel_id,
+                    favourite_keys=current_favourite_keys,
+                )
+            )
+
+            xbmcplugin.addDirectoryItem(
+                HANDLE,
+                plugin_url(
+                    action="play",
+                    url=play_url,
+                    title=title,
+                ),
+                item,
+                isFolder=False,
+            )
+
+        elif content_type == "movie":
+            item = xbmcgui.ListItem(
+                label=title
+            )
+
+            item.setInfo(
+                "video",
+                {
+                    "title": title,
+                    "mediatype": "movie",
+                },
+            )
+
+            apply_art(
+                item,
+                base_art(
+                    icon=poster,
+                    thumb=poster,
+                    poster=poster,
+                    fanart=fanart,
+                    landscape=fanart,
+                ),
+            )
+
+            item.addContextMenuItems(
+                favourite_context_menu(
+                    "movie",
+                    content_id,
+                    title,
+                    poster=poster,
+                    fanart=fanart,
+                    favourite_keys=current_favourite_keys,
+                )
+            )
+
+            xbmcplugin.addDirectoryItem(
+                HANDLE,
+                plugin_url(
+                    action="movie_details",
+                    vod_id=content_id,
+                    fallback_title=title,
+                ),
+                item,
+                isFolder=True,
+            )
+
+        elif content_type == "series":
+            item = xbmcgui.ListItem(
+                label=title
+            )
+
+            item.setInfo(
+                "video",
+                {
+                    "title": title,
+                    "tvshowtitle": title,
+                    "mediatype": "tvshow",
+                },
+            )
+
+            apply_art(
+                item,
+                base_art(
+                    icon=poster,
+                    thumb=poster,
+                    poster=poster,
+                    fanart=fanart,
+                    landscape=fanart,
+                ),
+            )
+
+            item.addContextMenuItems(
+                favourite_context_menu(
+                    "series",
+                    content_id,
+                    title,
+                    poster=poster,
+                    fanart=fanart,
+                    favourite_keys=current_favourite_keys,
+                )
+            )
+
+            xbmcplugin.addDirectoryItem(
+                HANDLE,
+                plugin_url(
+                    action="series_seasons",
+                    series_id=content_id,
+                    series_name=title,
+                ),
+                item,
+                isFolder=True,
+            )
+
+    xbmcplugin.endOfDirectory(
+        HANDLE
+    )
+
+
+# ============================================================
+# CODEX SEARCH
+# ============================================================
+
+def search_codex():
+    """
+    Search Live TV, Movies and Series in one pass.
+
+    The provider catalogue endpoints are queried once each and matching is
+    performed locally, avoiding any dependency on a provider-specific search
+    endpoint.
+    """
+    query = xbmcgui.Dialog().input(
+        "Search CODEX IPTV",
+        type=xbmcgui.INPUT_ALPHANUM,
+    ).strip()
+
+    if not query:
+        return
+
+    needle = query.casefold()
+    results = []
+    current_favourite_keys = favourite_key_set()
+
+    live_data = api_get(
+        "get_live_streams"
+    )
+
+    if isinstance(
+        live_data,
+        list,
+    ):
+        for stream in live_data:
+            name = (
+                stream.get("name")
+                or ""
+            )
+
+            if (
+                name
+                and needle in name.casefold()
+            ):
+                results.append(
+                    (
+                        "live",
+                        stream,
+                    )
+                )
+
+    movie_data = api_get(
+        "get_vod_streams"
+    )
+
+    if isinstance(
+        movie_data,
+        list,
+    ):
+        for movie in movie_data:
+            name = (
+                movie.get("name")
+                or ""
+            )
+
+            if (
+                name
+                and needle in name.casefold()
+            ):
+                results.append(
+                    (
+                        "movie",
+                        movie,
+                    )
+                )
+
+    series_data = api_get(
+        "get_series"
+    )
+
+    if isinstance(
+        series_data,
+        list,
+    ):
+        for show in series_data:
+            name = (
+                show.get("name")
+                or ""
+            )
+
+            if (
+                name
+                and needle in name.casefold()
+            ):
+                results.append(
+                    (
+                        "series",
+                        show,
+                    )
+                )
+
+    xbmcplugin.setPluginCategory(
+        HANDLE,
+        "Search: {}".format(
+            query
+        ),
+    )
+
+    xbmcplugin.setContent(
+        HANDLE,
+        "videos",
+    )
+
+    server, username, password = credentials()
+
+    live_extension = (
+        setting(
+            "stream_extension"
+        )
+        or "ts"
+    )
+
+    for content_type, data in results:
+        name = (
+            data.get("name")
+            or "Untitled"
+        )
+
+        if content_type == "live":
+            stream_id = str(
+                data.get(
+                    "stream_id",
+                    "",
+                )
+            )
+
+            if not stream_id:
+                continue
+
+            logo = (
+                data.get(
+                    "stream_icon"
+                )
+                or ""
+            )
+
+            epg_channel_id = str(
+                data.get(
+                    "epg_channel_id",
+                    "",
+                )
+            ).strip()
+
+            play_url = (
+                "{}/live/{}/{}/{}.{}".format(
+                    server,
+                    username,
+                    password,
+                    stream_id,
+                    live_extension,
+                )
+            )
+
+            item = xbmcgui.ListItem(
+                label="[Live TV] {}".format(
+                    name
+                )
+            )
+
+            item.setProperty(
+                "IsPlayable",
+                "true",
+            )
+
+            item.setInfo(
+                "video",
+                {
+                    "title": name,
+                    "mediatype": "video",
+                    "plot": "Live TV search result.",
+                    "playcount": 0,
+                },
+            )
+
+            item.setProperty(
+                "Watched",
+                "false",
+            )
+
+            item.setProperty(
+                "UnWatched",
+                "true",
+            )
+
+            apply_art(
+                item,
+                base_art(
+                    icon=logo,
+                    thumb=logo,
+                    fanart=ADDON_FANART,
+                ),
+            )
+
+            item.addContextMenuItems(
+                favourite_context_menu(
+                    "live",
+                    stream_id,
+                    name,
+                    poster=logo,
+                    fanart=ADDON_FANART,
+                    epg_channel_id=epg_channel_id,
+                    refresh_after=False,
+                    favourite_keys=current_favourite_keys,
+                )
+            )
+
+            xbmcplugin.addDirectoryItem(
+                HANDLE,
+                plugin_url(
+                    action="play",
+                    url=play_url,
+                    title=name,
+                ),
+                item,
+                isFolder=False,
+            )
+
+        elif content_type == "movie":
+            stream_id = str(
+                data.get(
+                    "stream_id",
+                    "",
+                )
+            )
+
+            if not stream_id:
+                continue
+
+            poster = first_value(
+                data.get(
+                    "stream_icon"
+                ),
+                data.get("cover"),
+            )
+
+            backdrop = first_backdrop(
+                data.get(
+                    "backdrop_path"
+                )
+            )
+
+            plot = clean_metadata_text(
+                first_value(
+                    data.get("plot"),
+                    data.get(
+                        "description"
+                    ),
+                )
+            )
+
+            item = xbmcgui.ListItem(
+                label="[Movie] {}".format(
+                    name
+                )
+            )
+
+            item.setInfo(
+                "video",
+                {
+                    "title": name,
+                    "mediatype": "movie",
+                    "plot": plot,
+                },
+            )
+
+            apply_art(
+                item,
+                base_art(
+                    icon=poster,
+                    thumb=poster,
+                    poster=poster,
+                    fanart=backdrop,
+                    landscape=backdrop,
+                ),
+            )
+
+            item.addContextMenuItems(
+                favourite_context_menu(
+                    "movie",
+                    stream_id,
+                    name,
+                    poster=poster,
+                    fanart=backdrop,
+                    refresh_after=False,
+                    favourite_keys=current_favourite_keys,
+                )
+            )
+
+            xbmcplugin.addDirectoryItem(
+                HANDLE,
+                plugin_url(
+                    action="movie_details",
+                    vod_id=stream_id,
+                    fallback_title=name,
+                ),
+                item,
+                isFolder=True,
+            )
+
+        elif content_type == "series":
+            series_id = str(
+                data.get(
+                    "series_id",
+                    "",
+                )
+            )
+
+            if not series_id:
+                continue
+
+            poster = first_value(
+                data.get("cover"),
+                data.get(
+                    "stream_icon"
+                ),
+            )
+
+            backdrop = first_backdrop(
+                data.get(
+                    "backdrop_path"
+                )
+            )
+
+            plot = clean_metadata_text(
+                first_value(
+                    data.get("plot"),
+                    data.get(
+                        "description"
+                    ),
+                )
+            )
+
+            item = xbmcgui.ListItem(
+                label="[Series] {}".format(
+                    name
+                )
+            )
+
+            item.setInfo(
+                "video",
+                {
+                    "title": name,
+                    "tvshowtitle": name,
+                    "mediatype": "tvshow",
+                    "plot": plot,
+                },
+            )
+
+            apply_art(
+                item,
+                base_art(
+                    icon=poster,
+                    thumb=poster,
+                    poster=poster,
+                    fanart=backdrop,
+                    landscape=backdrop,
+                ),
+            )
+
+            item.addContextMenuItems(
+                favourite_context_menu(
+                    "series",
+                    series_id,
+                    name,
+                    poster=poster,
+                    fanart=backdrop,
+                    refresh_after=False,
+                    favourite_keys=current_favourite_keys,
+                )
+            )
+
+            xbmcplugin.addDirectoryItem(
+                HANDLE,
+                plugin_url(
+                    action="series_seasons",
+                    series_id=series_id,
+                    series_name=name,
+                ),
+                item,
+                isFolder=True,
+            )
+
+    if not results:
+        item = xbmcgui.ListItem(
+            label="No results for \"{}\"".format(
+                query
+            )
+        )
+
+        item.setInfo(
+            "video",
+            {
+                "title": "No search results",
+                "plot": (
+                    "No Live TV channels, Movies or Series "
+                    "matched your search."
+                ),
+            },
+        )
+
+        apply_art(
+            item,
+            base_art(),
+        )
+
+        xbmcplugin.addDirectoryItem(
+            HANDLE,
+            plugin_url(
+                action="refresh"
+            ),
+            item,
+            isFolder=False,
+        )
+
+    xbmcplugin.endOfDirectory(
+        HANDLE
+    )
+
+
+# ============================================================
 # CODEX HOME
 # ============================================================
 
@@ -1310,7 +2494,7 @@ def root_menu():
     )
 
     add_folder(
-        "Favourites (Coming Soon)",
+        "Favourites",
         "favourites",
         art=base_art(),
         info={
@@ -1322,8 +2506,8 @@ def root_menu():
         },
     )
 
-    add_action(
-        "Search (Coming Soon)",
+    add_folder(
+        "Search",
         "search",
         art=base_art(),
         info={
@@ -1474,6 +2658,8 @@ def live_streams(
         data
     )
 
+    current_favourite_keys = favourite_key_set()
+
     # Provider order is deliberately preserved.
     for stream in data:
         stream_id = str(
@@ -1563,6 +2749,18 @@ def live_streams(
                 thumb=logo,
                 fanart=ADDON_FANART,
             ),
+        )
+
+        item.addContextMenuItems(
+            favourite_context_menu(
+                "live",
+                stream_id,
+                name,
+                poster=logo,
+                fanart=ADDON_FANART,
+                epg_channel_id=epg_channel_id,
+                favourite_keys=current_favourite_keys,
+            )
         )
 
         xbmcplugin.addDirectoryItem(
@@ -1673,6 +2871,8 @@ def movie_list(
         "movies",
     )
 
+    current_favourite_keys = favourite_key_set()
+
     for movie in data:
         stream_id = str(
             movie.get(
@@ -1749,13 +2949,40 @@ def movie_list(
         if genre:
             info["genre"] = genre
 
-        add_folder(
-            name,
-            "movie_details",
-            art=art,
-            info=info,
-            vod_id=stream_id,
-            fallback_title=name,
+        item = xbmcgui.ListItem(
+            label=name
+        )
+
+        apply_art(
+            item,
+            art,
+        )
+
+        item.setInfo(
+            "video",
+            info,
+        )
+
+        item.addContextMenuItems(
+            favourite_context_menu(
+                "movie",
+                stream_id,
+                name,
+                poster=poster,
+                fanart=backdrop,
+                favourite_keys=current_favourite_keys,
+            )
+        )
+
+        xbmcplugin.addDirectoryItem(
+            HANDLE,
+            plugin_url(
+                action="movie_details",
+                vod_id=stream_id,
+                fallback_title=name,
+            ),
+            item,
+            isFolder=True,
         )
 
     xbmcplugin.endOfDirectory(
@@ -2195,6 +3422,8 @@ def series_list(
         "tvshows",
     )
 
+    current_favourite_keys = favourite_key_set()
+
     for show in data:
         series_id = str(
             show.get(
@@ -2313,13 +3542,40 @@ def series_list(
                 release_date
             )
 
-        add_folder(
-            name,
-            "series_seasons",
-            art=art,
-            info=info,
-            series_id=series_id,
-            series_name=name,
+        item = xbmcgui.ListItem(
+            label=name
+        )
+
+        apply_art(
+            item,
+            art,
+        )
+
+        item.setInfo(
+            "video",
+            info,
+        )
+
+        item.addContextMenuItems(
+            favourite_context_menu(
+                "series",
+                series_id,
+                name,
+                poster=poster,
+                fanart=backdrop,
+                favourite_keys=current_favourite_keys,
+            )
+        )
+
+        xbmcplugin.addDirectoryItem(
+            HANDLE,
+            plugin_url(
+                action="series_seasons",
+                series_id=series_id,
+                series_name=name,
+            ),
+            item,
+            isFolder=True,
         )
 
     xbmcplugin.endOfDirectory(
@@ -3190,15 +4446,77 @@ def route():
         )
 
     elif action == "favourites":
-        coming_soon(
-            "Favourites",
-            folder=True,
+        favourites_root()
+
+    elif action == "favourites_list":
+        favourites_list(
+            params.get(
+                "content_type",
+                "",
+            ),
+            params.get(
+                "section_name",
+                "Favourites",
+            ),
         )
 
     elif action == "search":
-        coming_soon(
-            "Search",
-            folder=False,
+        search_codex()
+
+    elif action == "add_favourite":
+        add_favourite(
+            params.get(
+                "content_type",
+                "",
+            ),
+            params.get(
+                "content_id",
+                "",
+            ),
+            params.get(
+                "title",
+                "Item",
+            ),
+            poster=params.get(
+                "poster",
+                "",
+            ),
+            fanart=params.get(
+                "fanart",
+                "",
+            ),
+            epg_channel_id=params.get(
+                "epg_channel_id",
+                "",
+            ),
+            refresh_after=(
+                params.get(
+                    "refresh_after",
+                    "1",
+                ) != "0"
+            ),
+        )
+
+    elif action == "remove_favourite":
+        remove_favourite(
+            params.get(
+                "content_type",
+                "",
+            ),
+            params.get(
+                "content_id",
+                "",
+            ),
+            params.get(
+                "title",
+                "Item",
+            ),
+            refresh_after=(
+                params.get(
+                    "refresh_after",
+                    "1",
+                ) != "0"
+            ),
         )
 
     elif action == "refresh":
